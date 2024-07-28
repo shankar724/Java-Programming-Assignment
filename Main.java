@@ -169,7 +169,10 @@ public class Main {
                 // Create an ArrayList to store the words
                 ArrayList<String> keywordsList = new ArrayList<>();
                 for (String word : keywordsArray) {
-                    keywordsList.add(word.toLowerCase());
+                    if(!keywordsList.contains(word.toLowerCase())){
+                        keywordsList.add(word.toLowerCase());
+                    }
+                    // System.out.println(word.toLowerCase());
                 }
                 int queryId = queryList.size();
                 System.out.println("QueryId Generated: " + queryId);
@@ -205,7 +208,7 @@ public class Main {
                     }
                 }
             } else if(option == 3){
-                System.out.println("Thanks for checking the program. \n Terminating the program.");
+                System.out.println("Terminating the program.");
                 break;
             } else{
                 System.out.println("Invalid Input");
