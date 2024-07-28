@@ -13,23 +13,33 @@ class Query{
     public ArrayList<String> keywordsList;      // [keywords] 
     public Map<String, ArrayList<String>> queryResponse;    // Keyword: [{Line_i, File_i}]
     public String queryStatus;     // PENDING/SUCCESS 
+    public int totalThreadsAssigned;
+    public int threadsWorkPending;
 
-    Query(ArrayList<String> keywords){
+    Query(ArrayList<String> keywords, int threadsUsed){
         this.queryId = queryCounter++;
         this.keywordsList = keywords;
         this.queryStatus = "PENDING";
         queryResponse = new HashMap<>();
+        this.threadsWorkPending = threadsUsed; 
+        this.totalThreadsAssigned = threadsUsed;
     }
 
-    synchronized void updateResponse(String keyword, ArrayList<String> response){
-        boolean keywordExistence = queryResponse.containsKey(keyword);
-        if(keywordExistence){
-            for(String matches: response){
-                queryResponse.get(keyword).add(matches);
+    synchronized void updateResponse(ArrayList<String>keywords, ArrayList<String> response){
+        for(String keyword: keywords){
+            boolean keywordExistence = queryResponse.containsKey(keyword);
+            if(keywordExistence){
+                for(String matches: response){
+                    queryResponse.get(keyword).add(matches);
+                }
+            } else{
+                // if it doesn't exist
+                queryResponse.put(keyword, response);
             }
-        } else{
-            // if it doesn't exist
-            queryResponse.put(keyword, response);
+        }
+        this.threadsWorkPending--;
+        if(threadsWorkPending <= 0){
+            this.queryStatus = "SUCCESS";
         }
     }
 }
@@ -37,23 +47,22 @@ class Query{
 // Different worker threads will pick one of the keywords and a set of files and search the file and update the ouptut at the last, once search is completed. 
 class ImplementSearch implements Runnable{
     Query query;
-    String keyword;
+    ArrayList<String>keywords;
     int startIndex;
     int endIndex;
     ArrayList<ArrayList<String>> filesContent;
     ArrayList<String> Response; 
 
-    ImplementSearch(Query query, String keyword, int startIndex, int endIndex, ArrayList<ArrayList<String>> filesContent){
+    ImplementSearch(Query query, ArrayList<String>keywords, int startIndex, int endIndex, ArrayList<ArrayList<String>> filesContent){
         this.query =query;
-        this.keyword =keyword;
+        this.keywords =keywords;
         this.startIndex= startIndex;
         this.endIndex = endIndex;
         this.filesContent =filesContent;
         this.Response = new ArrayList<>();  
     }
 
-    @Override
-    public void run() {
+    void keywordSearch(String keyword){
         for(int i = startIndex; i < endIndex; i++){
             // ith file search
             for(int j = 0; j < filesContent.get(i).size(); j++){
@@ -68,9 +77,15 @@ class ImplementSearch implements Runnable{
                 }
             }
         }
-
+    }
+    @Override
+    public void run() {
+        
+        for(String keyword : keywords){
+            keywordSearch(keyword);
+        }
         // Update the Query object. 
-        query.updateResponse(keyword, Response);
+        query.updateResponse(keywords, Response);
     }
     
 }
@@ -79,26 +94,30 @@ class ImplementSearch implements Runnable{
 class SearchQuery implements Runnable{
     Query query;
     int numFiles;
+    int numThreads; 
     ArrayList<ArrayList<String>> filesContent;
     
-    SearchQuery(Query query, ArrayList<ArrayList<String>> filesContent){
+    SearchQuery(Query query, ArrayList<ArrayList<String>> filesContent, int numThreads){
         this.query = query;
         this.filesContent = filesContent;
         this.numFiles = filesContent.size();
+        this.numThreads = numThreads; 
     }
 
     @Override
     public void run() {
-        int numThreads = 4;
         ExecutorService localExecutorService = Executors.newFixedThreadPool(numThreads);
         ArrayList<String> keywords = query.keywordsList;
         int chunkSize = numFiles/numThreads; 
-        for(String keyword: keywords){
-            for(int i = 0; i < numThreads; i++){
-                int fileStartIndex = i * chunkSize;     // Included
-                int fileEndIndex = Math.min(fileStartIndex + chunkSize, numFiles);  // Excluded
-                localExecutorService.submit(new ImplementSearch(query, keyword, fileStartIndex, fileEndIndex, filesContent));
+        // 100 files, threads = 3
+
+        for(int i = 0; i < numThreads; i++){
+            int fileStartIndex = i * chunkSize;     // Included
+            int fileEndIndex = fileStartIndex + chunkSize;  // Excluded
+            if(i==numThreads - 1 ){
+                fileEndIndex = numFiles;
             }
+            localExecutorService.submit(new ImplementSearch(query, keywords, fileStartIndex, fileEndIndex, filesContent));
         }
         localExecutorService.shutdown();
     }
@@ -121,7 +140,7 @@ public class Main {
                     List<String> lines = Files.readAllLines(filePath);
                     ArrayList<String> linesContent = new ArrayList<>();
                     for(String str: lines){
-                        linesContent.add(str);
+                        linesContent.add(str.toLowerCase());
                     }
                     filesContent.add(linesContent);
                 }
@@ -135,12 +154,14 @@ public class Main {
         Scanner sc = new Scanner(System.in);
         ArrayList<Query> queryList = new ArrayList<>();
         ExecutorService executorService = Executors.newFixedThreadPool(1);
+        int numThreads = 4; // worker threads used for each query search. 
 
         // Read all files and store as strings in some global or static variables. 
         while(true){
-            System.out.println("Please select the *option number* for the desired query.");
-            System.out.println("1: New Query Input \n 2: Check Query Response \n 3: Exit");
+            System.out.println("\n\nPlease select the *option number* for the desired query.");
+            System.out.println(" 1: New Query Input \n 2: Check Query Response \n 3: Exit");
             int option = sc.nextInt();
+            sc.nextLine();
             if(option == 1){
                 System.out.println("Enter the keywords (space-separated) to be searched across the set of files. ");
                 String str = sc.nextLine();
@@ -148,12 +169,14 @@ public class Main {
                 // Create an ArrayList to store the words
                 ArrayList<String> keywordsList = new ArrayList<>();
                 for (String word : keywordsArray) {
-                    keywordsList.add(word);
+                    keywordsList.add(word.toLowerCase());
                 }
-                Query newQuery = new Query(keywordsList);
+                int queryId = queryList.size();
+                System.out.println("QueryId Generated: " + queryId);
+                Query newQuery = new Query(keywordsList, numThreads);
                 queryList.add(newQuery);
-                executorService.execute(new SearchQuery(newQuery, filesContent));
-
+                executorService.execute(new SearchQuery(newQuery, filesContent, numThreads));
+                
             } else if(option == 2){
                 System.out.println("Enter the query id.");
                 int queryId = sc.nextInt();
@@ -175,7 +198,10 @@ public class Main {
                             System.out.println("]");
                         }
                     } else{
-                        System.out.println("Query Execution is IN PROGRESS");
+                        // System.out.println("Query Execution is IN PROGRESS");
+                        int totalThreadsAssigned = queryObj.totalThreadsAssigned;
+                        int threadsInProgress = queryObj.threadsWorkPending;
+                        System.out.println("Report: " + threadsInProgress +"/" + totalThreadsAssigned + " Threads WORK IN PROGRESS");
                     }
                 }
             } else if(option == 3){
