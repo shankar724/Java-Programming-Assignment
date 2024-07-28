@@ -1,3 +1,8 @@
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,21 +18,59 @@ class Query{
         this.queryId = queryCounter++;
         this.keywordsList = keywords;
         this.queryStatus = "PENDING";
-        // queryResponse = new Map<String, new List<String>>();
+        queryResponse = new HashMap<>();
     }
 
-    synchronized void updateResponse(){
-        
+    synchronized void updateResponse(String keyword, ArrayList<String> response){
+        boolean keywordExistence = queryResponse.containsKey(keyword);
+        if(keywordExistence){
+            for(String matches: response){
+                queryResponse.get(keyword).add(matches);
+            }
+        } else{
+            // if it doesn't exist
+            queryResponse.put(keyword, response);
+        }
     }
 }
 
 // Different worker threads will pick one of the keywords and a set of files and search the file and update the ouptut at the last, once search is completed. 
 class ImplementSearch implements Runnable{
+    Query query;
+    String keyword;
+    int startIndex;
+    int endIndex;
+    ArrayList<ArrayList<String>> filesContent;
+    ArrayList<String> Response; 
+
+    ImplementSearch(Query query, String keyword, int startIndex, int endIndex, ArrayList<ArrayList<String>> filesContent){
+        this.query =query;
+        this.keyword =keyword;
+        this.startIndex= startIndex;
+        this.endIndex = endIndex;
+        this.filesContent =filesContent;
+        this.Response = new ArrayList<>();  
+    }
 
     @Override
     public void run() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'run'");
+        for(int i = startIndex; i < endIndex; i++){
+            // ith file search
+            for(int j = 0; j < filesContent.get(i).size(); j++){
+                String[] lineWords = filesContent.get(i).get(j).split("\\s+");
+                for(String word: lineWords){
+                    if(word.equals(keyword)){
+                        // keyword found in ith file and jth line
+                        String log = "{ Line_" + j + ", File_" + i + "}";
+                        Response.add(log);
+                        break;      // logging at max 1 match per line. 
+                    }
+                }
+            }
+        }
+
+        // Update the Query object. 
+        query.updateResponse(keyword, Response);
     }
     
 }
@@ -35,21 +78,60 @@ class ImplementSearch implements Runnable{
 // One thread has the responsibility for looking at the query input and distributing the search work across other threadpool/
 class SearchQuery implements Runnable{
     Query query;
-
-    SearchQuery(Query query){
+    int numFiles;
+    ArrayList<ArrayList<String>> filesContent;
+    
+    SearchQuery(Query query, ArrayList<ArrayList<String>> filesContent){
         this.query = query;
+        this.filesContent = filesContent;
+        this.numFiles = filesContent.size();
     }
 
     @Override
     public void run() {
-        
+        int numThreads = 4;
+        ExecutorService localExecutorService = Executors.newFixedThreadPool(numThreads);
+        ArrayList<String> keywords = query.keywordsList;
+        int chunkSize = numFiles/numThreads; 
+        for(String keyword: keywords){
+            for(int i = 0; i < numThreads; i++){
+                int fileStartIndex = i * chunkSize;     // Included
+                int fileEndIndex = Math.min(fileStartIndex + chunkSize, numFiles);  // Excluded
+                localExecutorService.submit(new ImplementSearch(query, keyword, fileStartIndex, fileEndIndex, filesContent));
+            }
+        }
+        localExecutorService.shutdown();
     }
     
 }
 
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
+        
+        // Read the files and store in array list. 
+        ArrayList<ArrayList<String>> filesContent = new ArrayList<>();  // <fileid: <fileContent>>
+        File dir = new File("output");
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile()) {
+                    // Read the content of the file
+                    Path filePath = Paths.get(file.getAbsolutePath());
+                    List<String> lines = Files.readAllLines(filePath);
+                    ArrayList<String> linesContent = new ArrayList<>();
+                    for(String str: lines){
+                        linesContent.add(str);
+                    }
+                    filesContent.add(linesContent);
+                }
+            }
+        }
+        // System.out.println(filesContent.size() + " " + filesContent.get(0).size());
+        // for(String x: filesContent.get(0)){
+        //     System.out.println(x);
+        // }
+
         Scanner sc = new Scanner(System.in);
         ArrayList<Query> queryList = new ArrayList<>();
         ExecutorService executorService = Executors.newFixedThreadPool(1);
@@ -70,7 +152,8 @@ public class Main {
                 }
                 Query newQuery = new Query(keywordsList);
                 queryList.add(newQuery);
-                executorService.execute(new SearchQuery(newQuery));
+                executorService.execute(new SearchQuery(newQuery, filesContent));
+
             } else if(option == 2){
                 System.out.println("Enter the query id.");
                 int queryId = sc.nextInt();
@@ -101,9 +184,8 @@ public class Main {
             } else{
                 System.out.println("Invalid Input");
             }
-
-
         }
+        executorService.shutdown();
     }
 }
 
